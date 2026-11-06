@@ -54,6 +54,7 @@ export const login = async ({ email, password }) => {
     { role: user.role },
     getJwtSecret(),
     {
+      algorithm: 'HS256',
       subject: user._id.toString(),
       expiresIn: process.env.JWT_EXPIRES_IN || '8h',
     },
@@ -62,7 +63,8 @@ export const login = async ({ email, password }) => {
   return { token, user: getSafeUser(user) };
 };
 
-export const verifyToken = (token) => jwt.verify(token, getJwtSecret());
+export const verifyToken = (token) =>
+  jwt.verify(token, getJwtSecret(), { algorithms: ['HS256'] });
 
 export const findActiveUserById = async (userId) => {
   if (!mongoose.isValidObjectId(userId)) return null;
