@@ -1,0 +1,12 @@
+# Environment files (keep example templates tracked)
+.env
+.env.*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output and coverage
+dist/
+build/
+coverage/
