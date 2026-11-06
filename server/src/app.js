@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import healthRoutes from './routes/healthRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import employeeRoutes from './routes/employeeRoutes.js';
+import leaveRoutes from './routes/leaveRoutes.js';
 import errorHandler from './middleware/errorHandler.js';
 
 const app = express();
@@ -15,6 +16,7 @@ app.use(express.json());
 app.use('/api', healthRoutes);
 app.use('/api/auth', authRoutes);
 app.use('/api/employees', employeeRoutes);
+app.use('/api/leaves', leaveRoutes);
 app.use(errorHandler);
 
 export default app;
