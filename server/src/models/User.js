@@ -18,6 +18,7 @@ const userSchema = new mongoose.Schema(
     passwordHash: {
       type: String,
       required: true,
+      select: false,
     },
     role: {
       type: String,
@@ -30,8 +31,21 @@ const userSchema = new mongoose.Schema(
     joinDate: {
       type: Date,
     },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
   },
-  { timestamps: true },
+  {
+    timestamps: true,
+    toJSON: {
+      transform(_document, returnedObject) {
+        delete returnedObject.passwordHash;
+        delete returnedObject.__v;
+        return returnedObject;
+      },
+    },
+  },
 );
 
 const User = mongoose.model('User', userSchema);
