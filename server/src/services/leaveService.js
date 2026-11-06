@@ -2,6 +2,12 @@ import mongoose from 'mongoose';
 import { LEAVE_ALLOCATIONS, LEAVE_TYPES } from '../config/leavePolicy.js';
 import LeaveBalance from '../models/LeaveBalance.js';
 import LeaveRequest from '../models/LeaveRequest.js';
+import {
+  logNotificationFailure,
+  notifyEmployeeLeaveApproved,
+  notifyEmployeeLeaveRejected,
+  notifyHrOfLeaveApplication,
+} from './notificationService.js';
 
 export const createHttpError = (statusCode, message) => {
   const error = new Error(message);
@@ -157,7 +163,9 @@ export const applyForLeave = async ({ employeeId, type, fromDate, toDate, reason
     status: 'pending',
   });
 
-  // Notification hook: call the notification service here after it is implemented.
+  void notifyHrOfLeaveApplication(leave).catch((error) =>
+    logNotificationFailure('application', error),
+  );
   return toSafeLeave(leave);
 };
 
@@ -235,7 +243,9 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, reviewed
     );
     if (!rejectedLeave) throw createHttpError(409, 'Leave request has already been processed');
 
-    // Notification hook: call the notification service here after it is implemented.
+    void notifyEmployeeLeaveRejected(rejectedLeave).catch((error) =>
+      logNotificationFailure('rejected', error),
+    );
     return toSafeLeave(rejectedLeave);
   }
 
@@ -287,7 +297,9 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, reviewed
     throw createHttpError(409, 'Leave request has already been processed');
   }
 
-  // Notification hook: call the notification service here after it is implemented.
+  void notifyEmployeeLeaveApproved(approvedLeave).catch((error) =>
+    logNotificationFailure('approved', error),
+  );
   return toSafeLeave(approvedLeave);
 };
 
