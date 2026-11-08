@@ -211,3 +211,18 @@ Any stretch feature, including attendance anomaly detection, requires explicit a
 - Do not commit changes automatically.
 - Wait for review before moving to the next module.
 - Do not add features that were not requested.
+
+## Attendance Rules
+
+- Only employees can check in and check out. HR has read-only access to all attendance records; no manual correction in v1.
+- One check-in and one check-out per employee per IST calendar day, enforced by a unique index on `employeeId + date`.
+- Check-out requires a prior check-in. Duplicate check-in or check-out returns HTTP 409.
+- Weekend check-ins (Saturday, Sunday) are rejected.
+- Office start time is 09:30 in `Asia/Kolkata`. Check-in strictly after 09:30 IST is late. Computed on the server only.
+- Never accept `employeeId`, date, check-in/out times or `isLate` from the client.
+- Store the date as a `YYYY-MM-DD` string (IST) and timestamps as Date values.
+- Employees see only their own records.
+- A missing record is shown as "No record", never "Absent" (no leave integration in v1).
+- Do not block check-in based on approved leave in v1.
+- Keep timezone, start time and working days in a config file, not in service logic.
+- Out of scope: biometric/GPS attendance, AI attendance analysis, email notifications, HR corrections.

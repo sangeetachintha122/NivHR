@@ -7,8 +7,38 @@ import PolicyDoc from '../models/PolicyDoc.js';
 import { AIServiceUnavailableError, embedTexts, generateJson } from './aiService.js';
 import { chunkText } from './chunkingService.js';
 
-const NOT_FOUND_ANSWER = "I couldn't find this in the company policy documents.";
+const NOT_FOUND_ANSWER = "I couldn't find this in the company policy documents. Try asking about a specific policy topic or check with HR.";
 const safeDocumentFields = 'title filename chunkCount createdAt';
+
+export const getConversationalResponse = (question) => {
+  const normalized = question
+    .toLocaleLowerCase('en')
+    .replace(/[^\p{L}\p{N}\s']/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (/^(hi|hello|hey)( there)?$/.test(normalized)) {
+    return 'Hi there! 👋 How can I help you with your company HR policies today?';
+  }
+  if (/^good (morning|afternoon|evening)$/.test(normalized)) {
+    const greeting = normalized.replace(/^good /, 'Good ');
+    return `${greeting}! How can I help you with your HR policy questions today?`;
+  }
+  if (/^(how are you|how are you doing|how is it going|how's it going)$/.test(normalized)) {
+    return "I'm doing great! 😊 I'm here to help you understand company HR policies. What would you like to know?";
+  }
+  if (/^(thanks?|thank you)( so much| very much| for your help)?$/.test(normalized)) {
+    return "You're welcome! Feel free to ask me whenever you have questions about company policies.";
+  }
+  if (/^(bye|goodbye|see you|see you later)$/.test(normalized)) {
+    return 'Goodbye! Have a great day. Feel free to come back whenever you need help with HR policies.';
+  }
+  if (/^(tell|give|write|share) me (a |an )?(joke|story|poem|recipe)$/.test(normalized)) {
+    return "Haha! 😄 I'm mainly here to help with company HR policies. Would you like to know about leave, working hours, work-from-home rules, or another policy?";
+  }
+
+  return null;
+};
 
 export const createHttpError = (statusCode, message) => {
   const error = new Error(message);
@@ -145,6 +175,30 @@ const getMinimumScore = () => {
   return Number.isFinite(configuredScore) ? configuredScore : 0.6;
 };
 
+export const retrievePolicyChunks = async (queries, limit = 6) => {
+  const queryVectors = await embedTexts(queries, 'RETRIEVAL_QUERY');
+  const storedChunks = await PolicyChunk.find()
+    .select('+embedding')
+    .populate({ path: 'docId', select: 'title' })
+    .lean();
+  const scored = storedChunks
+    .map((chunk) => ({
+      chunk,
+      score: Math.max(...queryVectors.map((vector) => cosineSimilarity(vector, chunk.embedding) ?? -1)),
+    }))
+    .filter(({ chunk, score }) => score >= getMinimumScore() && chunk.docId)
+    .sort((left, right) => right.score - left.score);
+  return {
+    topSimilarityScore: scored[0]?.score ?? null,
+    chunks: scored.slice(0, limit).map(({ chunk, score }) => ({
+      docTitle: chunk.docId.title,
+      chunkIndex: chunk.chunkIndex,
+      text: chunk.text,
+      score,
+    })),
+  };
+};
+
 const toShortExcerpt = (text) => {
   const normalized = text.replace(/\s+/g, ' ').trim();
   return normalized.length <= 200 ? normalized : `${normalized.slice(0, 197).trimEnd()}...`;
@@ -189,6 +243,12 @@ export const answerPolicyQuestion = async ({ userId, question }) => {
   const auditMetadata = { topSimilarityScore: null, retrievedChunkCount: 0, found: false };
 
   try {
+    const conversationalAnswer = getConversationalResponse(question);
+    if (conversationalAnswer) {
+      auditStatus = 'conversation';
+      return { found: false, answer: conversationalAnswer, sources: [] };
+    }
+
     const [queryEmbedding] = await embedTexts([question], 'RETRIEVAL_QUERY');
     const storedChunks = await PolicyChunk.find()
       .select('+embedding')

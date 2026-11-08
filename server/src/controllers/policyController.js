@@ -12,7 +12,7 @@ const uploadBodySchema = z.object({
 }).strict();
 
 const questionSchema = z.object({
-  question: z.string().trim().min(3).max(500),
+  question: z.string().trim().min(1).max(500),
 }).strict();
 
 export const uploadPolicyController = async (req, res, next) => {

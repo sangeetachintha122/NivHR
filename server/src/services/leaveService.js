@@ -187,6 +187,21 @@ export const getMyLeaves = async ({ employeeId, status, page, limit }) => {
   };
 };
 
+export const cancelMyLeave = async ({ leaveId, employeeId }) => {
+  validateObjectId(leaveId, 'leave request ID');
+
+  const cancelledLeave = await LeaveRequest.findOneAndUpdate(
+    { _id: leaveId, employeeId, status: 'pending' },
+    { $set: { status: 'cancelled' } },
+    { new: true, runValidators: true },
+  );
+  if (cancelledLeave) return toSafeLeave(cancelledLeave);
+
+  const existingLeave = await LeaveRequest.findOne({ _id: leaveId, employeeId }).select('_id status');
+  if (!existingLeave) throw createHttpError(404, 'Leave request not found');
+  throw createHttpError(409, 'Only pending leave requests can be cancelled');
+};
+
 export const listAllLeaves = async ({ status, type, employeeId, page, limit }) => {
   const filter = {};
   if (status) filter.status = status;

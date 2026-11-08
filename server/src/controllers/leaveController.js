@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import { reviewLeaveRequest } from '../services/leaveReviewService.js';
 import { LEAVE_TYPES } from '../config/leavePolicy.js';
 import {
   applyForLeave,
+  cancelMyLeave,
   createHttpError,
   decideLeave,
   getMyLeaves,
@@ -33,14 +35,14 @@ const applySchema = z
 
 const myLeavesQuerySchema = z
   .object({
-    status: z.enum(['pending', 'approved', 'rejected']).optional(),
+    status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional(),
     ...paginationSchema,
   })
   .strict();
 
 const allLeavesQuerySchema = z
   .object({
-    status: z.enum(['pending', 'approved', 'rejected']).optional(),
+    status: z.enum(['pending', 'approved', 'rejected', 'cancelled']).optional(),
     type: z.enum(LEAVE_TYPES).optional(),
     employeeId: z.string().regex(/^[a-f\d]{24}$/i).optional(),
     ...paginationSchema,
@@ -83,6 +85,15 @@ export const getMyLeavesController = async (req, res, next) => {
   }
 };
 
+export const cancelMyLeaveController = async (req, res, next) => {
+  try {
+    const leave = await cancelMyLeave({ leaveId: req.params.id, employeeId: req.user.id });
+    return res.status(200).json({ leave });
+  } catch (error) {
+    return next(error);
+  }
+};
+
 export const listAllLeavesController = async (req, res, next) => {
   const parsed = allLeavesQuerySchema.safeParse(req.query);
   if (!parsed.success) return next(validationError());
@@ -106,6 +117,15 @@ export const decideLeaveController = async (req, res, next) => {
       ...parsed.data,
     });
     return res.status(200).json({ leave });
+  } catch (error) {
+    return next(error);
+  }
+};
+
+export const reviewLeaveController = async (req, res, next) => {
+  try {
+    const analysis = await reviewLeaveRequest({ leaveId: req.params.id, reviewerId: req.user.id });
+    return res.status(200).json({ analysis });
   } catch (error) {
     return next(error);
   }
