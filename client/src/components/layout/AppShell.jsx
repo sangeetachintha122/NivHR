@@ -17,6 +17,7 @@ const baseNavigation = [
 
 const hrNavigation = [
   { label: 'Employees', to: '/employees', icon: Users },
+  { label: 'Department Capacity', to: '/department-capacity', icon: Building2 },
   { label: 'AI leave review', to: '/ai-leave-review', icon: ShieldCheck },
   { label: 'HR analytics', to: '/analytics', icon: ChartNoAxesCombined },
 ];
@@ -26,7 +27,7 @@ const titleFromPath = (path) => {
   return ({
     '/dashboard': 'Overview', '/employees': 'Employees', '/leaves': 'Leave management',
     '/attendance': 'Attendance', '/policy': 'Policy assistant', '/ai-leave-review': 'AI leave review',
-    '/analytics': 'HR analytics', '/profile': 'Profile & settings',
+    '/analytics': 'HR analytics', '/department-capacity': 'Department Capacity', '/profile': 'Profile & settings',
   })[path] || 'NivHR';
 };
 

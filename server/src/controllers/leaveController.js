@@ -50,7 +50,10 @@ const allLeavesQuerySchema = z
   .strict();
 
 const decisionSchema = z.discriminatedUnion('decision', [
-  z.object({ decision: z.literal('approved') }).strict(),
+  z.object({
+    decision: z.literal('approved'),
+    overrideReason: z.string().trim().min(1).max(1000).optional(),
+  }).strict(),
   z
     .object({
       decision: z.literal('rejected'),
