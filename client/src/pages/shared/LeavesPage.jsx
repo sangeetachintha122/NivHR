@@ -7,6 +7,7 @@ import { countWorkingDays, formatDate, leaveTypeLabel } from '../../utils/format
 import { Button, Card, EmptyState, Field, InlineError, LoadingInline, Modal, PageHeader, StatusBadge } from '../../components/common/Ui.jsx';
 
 const PAGE_SIZE = 10;
+const CAPACITY_OVERRIDE_REQUIRED_MESSAGE = 'Department leave capacity would be exceeded. Provide an override reason to approve this request.';
 
 function todayInIndia() {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
@@ -115,6 +116,7 @@ function HRLeavePage() {
   const [notice, setNotice] = useState('');
   const [decision, setDecision] = useState(null);
   const [reason, setReason] = useState('');
+  const [overrideRequired, setOverrideRequired] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
@@ -135,11 +137,15 @@ function HRLeavePage() {
     setSaving(true); setError('');
     try {
       await api.patch(`/leaves/${decision.leave.id}/decision`, nextDecision);
-      setDecision(null); setReason(''); setNotice(nextDecision.decision === 'approved' ? 'Leave request approved.' : 'Leave request rejected.'); await load();
-    } catch (requestError) { setError(getErrorMessage(requestError)); }
+      setDecision(null); setReason(''); setOverrideRequired(false); setNotice(nextDecision.decision === 'approved' ? 'Leave request approved.' : 'Leave request rejected.'); await load();
+    } catch (requestError) {
+      if (nextDecision.decision === 'approved' && requestError.response?.status === 409 && requestError.response.data?.message === CAPACITY_OVERRIDE_REQUIRED_MESSAGE) {
+        setOverrideRequired(true); setReason(''); setError('');
+      } else setError(getErrorMessage(requestError));
+    }
     finally { setSaving(false); }
   };
-  const openDecision = (leave, action) => { setReason(''); setDecision({ leave, action }); };
+  const openDecision = (leave, action) => { setReason(''); setOverrideRequired(false); setDecision({ leave, action }); };
 
   return <>
     <PageHeader eyebrow="Team time away" title="Leave management" description="Review employee leave requests and record decisions." />
@@ -152,7 +158,7 @@ function HRLeavePage() {
       </div>
       {loading ? <LoadingInline label="Loading leave requests" /> : visible.length ? <><div className="overflow-x-auto app-scrollbar"><table className="w-full min-w-[940px] text-left"><thead><tr className="bg-[#fafbfc] text-[10px] font-bold uppercase tracking-[.1em] text-[#9aa2b1]"><th className="px-5 py-3.5 sm:px-6">Employee</th><th className="px-5 py-3.5">Leave</th><th className="px-5 py-3.5">Dates</th><th className="px-5 py-3.5">Days</th><th className="px-5 py-3.5">Reason</th><th className="px-5 py-3.5">Status</th><th className="px-5 py-3.5 text-right">Decision</th></tr></thead><tbody className="divide-y divide-[#f0f1f5]">{visible.map((leave) => <tr key={leave.id} className="align-top text-xs hover:bg-[#fcfcfe]"><td className="px-5 py-4 sm:px-6"><p className="font-semibold text-[#384358]">{leave.employee?.name || 'Employee'}</p><p className="mt-1 text-[11px] text-[#969eae]">{leave.employee?.email || '—'}</p></td><td className="px-5 py-4 text-[#59647a]">{leaveTypeLabel(leave.type)}</td><td className="whitespace-nowrap px-5 py-4 text-[#59647a]">{formatDate(leave.fromDate)}<br /><span className="text-[#9ba3b2]">to {formatDate(leave.toDate)}</span></td><td className="px-5 py-4 font-semibold text-[#465168]">{leave.totalDays}</td><td className="max-w-[220px] px-5 py-4 leading-5 text-[#788297]">{leave.reason}</td><td className="px-5 py-4"><StatusBadge status={leave.status} /></td><td className="px-5 py-4"><div className="flex justify-end gap-1.5">{leave.status === 'pending' ? <><button onClick={() => openDecision(leave, 'approve')} className="rounded-lg bg-[#edf8f1] px-2.5 py-2 text-[10px] font-bold text-[#278051] hover:bg-[#dcf2e4]">Approve</button><button onClick={() => openDecision(leave, 'reject')} className="rounded-lg bg-[#fff1f2] px-2.5 py-2 text-[10px] font-bold text-[#b94b58] hover:bg-[#ffe2e5]">Reject</button></> : <span className="text-[10px] text-[#a0a7b5]">Reviewed</span>}</div></td></tr>)}</tbody></table></div><div className="flex items-center justify-between border-t border-[#eff0f4] px-5 py-3.5 sm:px-6"><p className="text-xs text-[#8b94a5]">Page {page} of {pages}</p><div className="flex gap-2"><Button size="sm" variant="secondary" disabled={page <= 1} onClick={() => setPage((current) => current - 1)}><ArrowLeft className="h-3.5 w-3.5" />Previous</Button><Button size="sm" variant="secondary" disabled={page >= pages} onClick={() => setPage((current) => current + 1)}>Next<ArrowRight className="h-3.5 w-3.5" /></Button></div></div></> : <EmptyState icon={CalendarDays} title="No leave requests found" description={search || status || type ? 'Try a different search or filter.' : 'New employee submissions will appear here.'} />}
     </Card>
-    {decision?.action === 'approve' && <Modal title="Approve leave request" description="This decision will be saved to the employee’s leave record." onClose={() => !saving && setDecision(null)}><div className="rounded-xl bg-[#f7f8fb] p-4 text-sm text-[#59647a]"><p><strong>{decision.leave.employee?.name || 'Employee'}</strong> · {leaveTypeLabel(decision.leave.type)}</p><p className="mt-1 text-xs">{formatDate(decision.leave.fromDate)} – {formatDate(decision.leave.toDate)} · {decision.leave.totalDays} working days</p></div><div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => setDecision(null)} disabled={saving}>Cancel</Button><Button onClick={() => saveDecision({ decision: 'approved' })} disabled={saving}><Check className="h-4 w-4" />{saving ? 'Saving…' : 'Confirm approval'}</Button></div></Modal>}
+    {decision?.action === 'approve' && <Modal title="Approve leave request" description="This decision will be saved to the employee’s leave record." onClose={() => !saving && setDecision(null)}><div className="rounded-xl bg-[#f7f8fb] p-4 text-sm text-[#59647a]"><p><strong>{decision.leave.employee?.name || 'Employee'}</strong> · {leaveTypeLabel(decision.leave.type)}</p><p className="mt-1 text-xs">{formatDate(decision.leave.fromDate)} – {formatDate(decision.leave.toDate)} · {decision.leave.totalDays} working days</p></div>{overrideRequired && <div className="mt-4 space-y-3"><p role="alert" className="rounded-xl border border-[#f1d6b8] bg-[#fff7ec] p-3 text-xs leading-5 text-[#805014]">Approving this request will exceed the configured department capacity. Enter a reason to record an HR override.</p><Field as="textarea" label="Capacity override reason" required maxLength={1000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explain why this capacity override is appropriate" /></div>}<div className="mt-5 flex justify-end gap-2"><Button variant="secondary" onClick={() => setDecision(null)} disabled={saving}>Cancel</Button><Button onClick={() => saveDecision({ decision: 'approved', ...(overrideRequired ? { overrideReason: reason.trim() } : {}) })} disabled={saving || (overrideRequired && !reason.trim())}><Check className="h-4 w-4" />{saving ? 'Saving…' : overrideRequired ? 'Approve with override' : 'Confirm approval'}</Button></div></Modal>}
     {decision?.action === 'reject' && <Modal title="Reject leave request" description="Add a reason so the employee understands the decision." onClose={() => !saving && setDecision(null)}><div className="mb-4 rounded-xl bg-[#f7f8fb] p-4 text-sm text-[#59647a]"><strong>{decision.leave.employee?.name || 'Employee'}</strong> · {leaveTypeLabel(decision.leave.type)} · {decision.leave.totalDays} working days</div><form onSubmit={(event) => { event.preventDefault(); saveDecision({ decision: 'rejected', rejectionReason: reason.trim() }); }}><Field as="textarea" label="Rejection reason" required maxLength={2000} value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Explain why this request cannot be approved" /><div className="mt-5 flex justify-end gap-2"><Button type="button" variant="secondary" onClick={() => setDecision(null)} disabled={saving}>Cancel</Button><Button type="submit" variant="danger" disabled={saving || !reason.trim()}><X className="h-4 w-4" />{saving ? 'Saving…' : 'Confirm rejection'}</Button></div></form></Modal>}
   </>;
 }

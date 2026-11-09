@@ -11,6 +11,7 @@
     "smoke:policy": "node scripts/smoke/policy.smoke.js",
     "smoke:leave-review": "node scripts/smoke/leaveReview.smoke.js",
     "smoke:attendance": "node scripts/smoke/attendance.smoke.js",
+    "smoke:capacity": "node scripts/smoke/capacity.smoke.js",
     "test:attendance": "node --test scripts/smoke/attendanceClock.test.js",
     "verify:attendance-live": "node scripts/smoke/attendanceLive.smoke.js",
     "smoke:analytics": "node scripts/smoke/analytics.smoke.js"

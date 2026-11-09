@@ -2,6 +2,8 @@ import mongoose from 'mongoose';
 import { LEAVE_ALLOCATIONS, LEAVE_TYPES } from '../config/leavePolicy.js';
 import LeaveBalance from '../models/LeaveBalance.js';
 import LeaveRequest from '../models/LeaveRequest.js';
+import AuditLog from '../models/AuditLog.js';
+import { calculateDepartmentCapacity } from './capacityService.js';
 import {
   logNotificationFailure,
   notifyEmployeeLeaveApproved,
@@ -242,7 +244,26 @@ const compensateBalanceIncrement = async ({ leaveId, employeeId, type, totalDays
   }
 };
 
-export const decideLeave = async ({ leaveId, decision, rejectionReason, reviewedBy }) => {
+const writeCapacityOverrideAudit = async ({ reviewedBy, leaveId, department }) => {
+  try {
+    await AuditLog.create({
+      userId: reviewedBy,
+      feature: 'leave-approval',
+      intent: 'capacity-override',
+      status: 'success',
+      latencyMs: 0,
+      metadata: {
+        capacityOverride: true,
+        department,
+        leaveRequestId: leaveId,
+      },
+    });
+  } catch {
+    console.error('Department capacity override audit logging failed.');
+  }
+};
+
+export const decideLeave = async ({ leaveId, decision, rejectionReason, overrideReason, reviewedBy }) => {
   validateObjectId(leaveId, 'leave request ID');
 
   const leave = await LeaveRequest.findById(leaveId);
@@ -262,6 +283,21 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, reviewed
       logNotificationFailure('rejected', error),
     );
     return toSafeLeave(rejectedLeave);
+  }
+
+  // Rechecking here prevents stale AI-review data from authorizing approval. Independent HR approvals can still race without a transaction or capacity lock.
+  const departmentCapacity = await calculateDepartmentCapacity({
+    employeeId: leave.employeeId,
+    fromDate: leave.fromDate,
+    toDate: leave.toDate,
+    excludeLeaveId: leave._id,
+  });
+  const capacityOverride = departmentCapacity.configured && departmentCapacity.exceededDates.length > 0;
+  if (capacityOverride && !overrideReason?.trim()) {
+    throw createHttpError(
+      409,
+      'Department leave capacity would be exceeded. Provide an override reason to approve this request.',
+    );
   }
 
   const balance = await ensureBalance(leave.employeeId, leave.type);
@@ -288,6 +324,8 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, reviewed
           status: 'approved',
           reviewedBy,
           reviewedAt,
+          capacityOverride,
+          ...(capacityOverride ? { capacityOverrideReason: overrideReason.trim() } : {}),
         },
       },
       { new: true, runValidators: true },
@@ -310,6 +348,14 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, reviewed
       totalDays: leave.totalDays,
     });
     throw createHttpError(409, 'Leave request has already been processed');
+  }
+
+  if (capacityOverride) {
+    await writeCapacityOverrideAudit({
+      reviewedBy,
+      leaveId: leave._id,
+      department: departmentCapacity.department,
+    });
   }
 
   void notifyEmployeeLeaveApproved(approvedLeave).catch((error) =>

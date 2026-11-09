@@ -8,6 +8,7 @@ import leaveRoutes from './routes/leaveRoutes.js';
 import policyRoutes from './routes/policyRoutes.js';
 import attendanceRoutes from './routes/attendanceRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
+import capacityRoutes from './routes/capacityRoutes.js';
 import errorHandler from './middleware/errorHandler.js';
 
 const app = express();
@@ -23,6 +24,7 @@ app.use('/api/leaves', leaveRoutes);
 app.use('/api/policies', policyRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/analytics', analyticsRoutes);
+app.use('/api/capacity', capacityRoutes);
 app.use(errorHandler);
 
 export default app;

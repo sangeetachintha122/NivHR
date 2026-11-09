@@ -54,6 +54,15 @@ const leaveRequestSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    capacityOverride: {
+      type: Boolean,
+      default: false,
+    },
+    capacityOverrideReason: {
+      type: String,
+      trim: true,
+      maxlength: 1000,
+    },
   },
   { timestamps: true },
 );

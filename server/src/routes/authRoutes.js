@@ -9,9 +9,20 @@ import { createHttpError } from '../services/authService.js';
 
 const router = Router();
 
+const configuredWindowMs = Number(process.env.LOGIN_RATE_LIMIT_WINDOW_MS);
+const configuredLimit = Number(process.env.LOGIN_RATE_LIMIT_MAX);
+
 const loginRateLimit = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
+  windowMs:
+    Number.isSafeInteger(configuredWindowMs) && configuredWindowMs > 0
+      ? configuredWindowMs
+      : 15 * 60 * 1000,
+  limit:
+    Number.isSafeInteger(configuredLimit) && configuredLimit > 0
+      ? configuredLimit
+      : 20,
+  skipSuccessfulRequests: true,
+  skip: () => process.env.NODE_ENV === 'development',
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, _res, next) =>

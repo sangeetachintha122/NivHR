@@ -15,6 +15,7 @@ const PolicyPage = lazy(() => import('./pages/shared/PolicyPage.jsx'));
 const ProfilePage = lazy(() => import('./pages/shared/ProfilePage.jsx'));
 const AttendancePage = lazy(() => import('./pages/shared/AttendancePage.jsx'));
 const AnalyticsPage = lazy(() => import('./pages/hr/AnalyticsPage.jsx'));
+const DepartmentCapacityPage = lazy(() => import('./pages/hr/DepartmentCapacityPage.jsx'));
 
 function RoleHome() {
   const { user } = useAuth();
@@ -36,6 +37,7 @@ function AppRoutes() {
           <Route element={<RequireRole role="hr" />}>
             <Route path="employees" element={<EmployeesPage />} />
             <Route path="employees/:id" element={<EmployeeDetailPage />} />
+            <Route path="department-capacity" element={<DepartmentCapacityPage />} />
             <Route path="ai-leave-review" element={<LeaveReviewPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
           </Route>
