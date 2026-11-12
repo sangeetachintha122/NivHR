@@ -8,11 +8,13 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import ActivityEvent from '../../src/models/ActivityEvent.js';
 import AuditLog from '../../src/models/AuditLog.js';
 import DepartmentCapacity from '../../src/models/DepartmentCapacity.js';
 import LeaveBalance from '../../src/models/LeaveBalance.js';
 import LeaveRequest from '../../src/models/LeaveRequest.js';
 import User from '../../src/models/User.js';
+import { validateIsolatedMongoUri } from './databaseIdentityGuard.js';
 
 const serverDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 dotenv.config({ path: path.join(serverDirectory, '.env'), override: true });
@@ -29,51 +31,15 @@ const createdDocumentIds = {
   leaveRequests: [],
   leaveBalances: [],
   departmentCapacities: [],
+  activityEvents: [],
   auditLogs: [],
 };
 let testDatabaseConnected = false;
 let testServer;
 let baseUrl;
 
-const parseMongoUri = (value, variableName) => {
-  if (!value) throw new Error(`${variableName} is required.`);
-  let parsed;
-  try { parsed = new URL(value); } catch { throw new Error(`${variableName} must be a valid MongoDB connection URI.`); }
-  if (!['mongodb:', 'mongodb+srv:'].includes(parsed.protocol) || !parsed.hostname) {
-    throw new Error(`${variableName} must use mongodb:// or mongodb+srv://.`);
-  }
-  return parsed;
-};
-
-const canonicalUri = (uri) => {
-  const normalized = new URL(uri.href);
-  normalized.searchParams.sort();
-  return normalized.href;
-};
-
 const isolatedMongoUri = () => {
-  const testUri = parseMongoUri(process.env.ATTENDANCE_TEST_MONGO_URI, 'ATTENDANCE_TEST_MONGO_URI');
-  const productionUri = parseMongoUri(process.env.MONGO_URI, 'MONGO_URI');
-  let testDatabase;
-  try { testDatabase = decodeURIComponent(testUri.pathname.slice(1)); } catch {
-    throw new Error('ATTENDANCE_TEST_MONGO_URI must select the nivhr_test database.');
-  }
-  if (testDatabase !== 'nivhr_test') {
-    throw new Error('ATTENDANCE_TEST_MONGO_URI must select exactly the nivhr_test database.');
-  }
-  const authSources = [...testUri.searchParams.entries()]
-    .filter(([name]) => name.toLowerCase() === 'authsource');
-  if (authSources.length !== 1 || authSources[0][1] !== 'admin') {
-    throw new Error('ATTENDANCE_TEST_MONGO_URI must include exactly one authSource=admin option.');
-  }
-  const databaseOverrides = testUri.searchParams.getAll('dbName');
-  if (databaseOverrides.some((database) => database !== 'nivhr_test')) {
-    throw new Error('ATTENDANCE_TEST_MONGO_URI must select exactly the nivhr_test database.');
-  }
-  if (canonicalUri(testUri) === canonicalUri(productionUri)) {
-    throw new Error('ATTENDANCE_TEST_MONGO_URI must be different from MONGO_URI.');
-  }
-  return testUri.href;
+  return validateIsolatedMongoUri(process.env.ATTENDANCE_TEST_MONGO_URI, process.env.MONGO_URI);
 };
 
 const trackIds = (collection, documents) => {
@@ -96,11 +62,16 @@ const captureApiCreatedIds = async () => {
     createdUserIds.length
       ? LeaveBalance.find({ employeeId: { $in: createdUserIds } }).select('_id').lean()
       : [],
-    DepartmentCapacity.find({ department: { $in: [developmentDepartment, testingDepartment] } }).select('_id').lean(),
+    createdUserIds.length
+      ? ActivityEvent.find({ $or: [
+        { actorUserId: { $in: createdUserIds } },
+        { subjectUserId: { $in: createdUserIds } },
+      ] }).select('_id').lean()
+      : [],
     createdUserIds.length ? AuditLog.find({ userId: { $in: createdUserIds } }).select('_id').lean() : [],
   ]);
   if (queries[0].status === 'fulfilled') trackIds('leaveBalances', queries[0].value);
-  if (queries[1].status === 'fulfilled') trackIds('departmentCapacities', queries[1].value);
+  if (queries[1].status === 'fulfilled') trackIds('activityEvents', queries[1].value);
   if (queries[2].status === 'fulfilled') trackIds('auditLogs', queries[2].value);
   if (queries.some((query) => query.status === 'rejected')) throw new Error('Unable to inspect all API-created fixture documents.');
 };
@@ -224,15 +195,14 @@ try {
   const employeeTokens = new Map([...developmentEmployees, ...testingEmployees].map((user) => [user._id.toString(), tokenFor(user)]));
   const hrToken = tokenFor(hr);
 
-  const createdBalances = await settleCreatedRecords([...developmentEmployees, ...testingEmployees].map((employee) => LeaveBalance.create({
-    employeeId: employee._id, type: 'annual', total: 18, used: 0,
-  })));
-  trackIds('leaveBalances', createdBalances);
-  const createdCapacities = await DepartmentCapacity.create([
-    { department: developmentDepartment, maxSimultaneousAbsent: 1, updatedBy: hr._id },
-    { department: testingDepartment, maxSimultaneousAbsent: 1, updatedBy: hr._id },
-  ]);
-  trackIds('departmentCapacities', createdCapacities);
+  for (const employee of [...developmentEmployees, ...testingEmployees]) {
+    const balance = await LeaveBalance.create({ employeeId: employee._id, type: 'annual', total: 18, used: 0 });
+    trackIds('leaveBalances', [balance]);
+  }
+  for (const department of [developmentDepartment, testingDepartment]) {
+    const capacity = await DepartmentCapacity.create({ department, maxSimultaneousAbsent: 1, updatedBy: hr._id });
+    trackIds('departmentCapacities', [capacity]);
+  }
 
   const [targetLeave, approvedFixture, pendingFixture, rejectedFixture, cancelledFixture] = await settleCreatedRecords([
     createLeave(developmentEmployees[0]._id, 'pending'),
@@ -381,12 +351,16 @@ try {
       [LeaveRequest, createdDocumentIds.leaveRequests],
       [LeaveBalance, createdDocumentIds.leaveBalances],
       [DepartmentCapacity, createdDocumentIds.departmentCapacities],
+      [ActivityEvent, createdDocumentIds.activityEvents],
       [AuditLog, createdDocumentIds.auditLogs],
       [User, createdDocumentIds.users],
     ]) {
       if (!ids.length) continue;
       try {
-        await model.deleteMany({ _id: { $in: ids } });
+        const result = await model.deleteMany({ _id: { $in: ids } });
+        if (result.deletedCount !== ids.length) {
+          throw new Error(`Cleanup removed ${result.deletedCount} of ${ids.length} tracked documents.`);
+        }
       } catch {
         console.error(`Cleanup failed for tracked ${model.collection.collectionName} documents.`);
         process.exitCode = 1;

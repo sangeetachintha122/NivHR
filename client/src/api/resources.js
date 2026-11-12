@@ -33,7 +33,12 @@ export async function getAllMyLeaves(params = {}) {
   return { ...first.data, leaves };
 }
 
-export async function askAnalytics(question) {
-  const { data } = await api.post('/analytics/ask', { question });
+export async function askAnalytics(question, conversationId) {
+  const { data } = await api.post('/analytics/ask', { question, ...(conversationId ? { conversationId } : {}) });
+  return data;
+}
+
+export async function getAnalyticsConversation(conversationId) {
+  const { data } = await api.get(`/analytics/conversation/${conversationId}`);
   return data;
 }

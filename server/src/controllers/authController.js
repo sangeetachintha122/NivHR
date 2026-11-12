@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { createHttpError, getSafeUser, login } from '../services/authService.js';
+import { recordActivityEvent } from '../services/activityEventService.js';
 
 const loginSchema = z
   .object({
@@ -24,3 +25,13 @@ export const loginController = async (req, res, next) => {
 
 export const currentUserController = (req, res) =>
   res.status(200).json({ user: getSafeUser(req.currentUser) });
+
+export const logoutController = async (req, res) => {
+  await recordActivityEvent({
+    eventType: 'logout',
+    actorUserId: req.user.id,
+    subjectUserId: req.user.id,
+    department: req.currentUser.department,
+  });
+  return res.status(200).json({ message: 'Logged out' });
+};

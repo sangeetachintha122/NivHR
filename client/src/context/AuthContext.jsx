@@ -40,7 +40,15 @@ export function AuthProvider({ children }) {
     }
   }, [clearSession]);
 
-  const logout = useCallback(() => clearSession(), [clearSession]);
+  const logout = useCallback(async () => {
+    try {
+      await api.post('/auth/logout');
+    } catch {
+      // Clear the local session even if the network is unavailable; no logout is inferred server-side.
+    } finally {
+      clearSession();
+    }
+  }, [clearSession]);
   const value = useMemo(() => ({ user, loading, login, logout }), [user, loading, login, logout]);
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

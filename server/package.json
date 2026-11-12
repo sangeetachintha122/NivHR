@@ -13,6 +13,8 @@
     "smoke:attendance": "node scripts/smoke/attendance.smoke.js",
     "smoke:capacity": "node scripts/smoke/capacity.smoke.js",
     "test:attendance": "node --test scripts/smoke/attendanceClock.test.js",
+    "test:activity": "node --test scripts/smoke/activityEvent.test.js scripts/smoke/leaveDecision.test.js",
+    "test:analytics": "node --test scripts/smoke/analyticsEngine.test.js",
     "verify:attendance-live": "node scripts/smoke/attendanceLive.smoke.js",
     "smoke:analytics": "node scripts/smoke/analytics.smoke.js"
   },

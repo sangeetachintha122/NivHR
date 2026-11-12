@@ -28,6 +28,7 @@ const attendanceSchema = new mongoose.Schema(
 );
 
 attendanceSchema.index({ employeeId: 1, date: 1 }, { unique: true });
+attendanceSchema.index({ date: 1, isLate: 1 });
 
 const Attendance = mongoose.model('Attendance', attendanceSchema);
 
