@@ -67,10 +67,17 @@ export const generateCloudflareJson = async (prompt, configuration, fetchImpl = 
       throw new AIProviderError('cloudflare', timedOut ? 'timeout' : 'malformed_response');
     }
 
-    if (payload?.success !== true || typeof payload?.result?.response !== 'string') {
+    if (payload?.success !== true || !payload.result || typeof payload.result !== 'object'
+      || Array.isArray(payload.result) || !Object.hasOwn(payload.result, 'response')) {
       throw new AIProviderError('cloudflare', 'malformed_response');
     }
-    return parseJsonResponse(payload.result.response);
+
+    const generatedResponse = payload.result.response;
+    if (typeof generatedResponse === 'string') return parseJsonResponse(generatedResponse);
+    if (generatedResponse !== null && typeof generatedResponse === 'object' && !Array.isArray(generatedResponse)) {
+      return generatedResponse;
+    }
+    throw new AIProviderError('cloudflare', 'malformed_response');
   } finally {
     clearTimeout(timeout);
   }

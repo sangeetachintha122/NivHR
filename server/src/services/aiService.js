@@ -7,6 +7,8 @@ const GENERATION_TIMEOUT_MS = 45000;
 const MAX_EMBED_BATCH_SIZE = 100;
 const MAX_ATTEMPTS = 2;
 const VALID_TASK_TYPES = new Set(['RETRIEVAL_DOCUMENT', 'RETRIEVAL_QUERY']);
+export const GEMINI_DEV_SIMULATION_PROMPT = 'DEV_FALLBACK_PROBE_ONLY: Return only {"status":"ready","operations":[{"capability":"attendance_summary","range":{"kind":"relative","period":"today"},"filters":{},"limit":1}]}.';
+let developmentSimulationConsumed = false;
 
 export { AIProviderError };
 
@@ -95,7 +97,7 @@ const logRequestSuccess = (method, startedAt) => {
 const isTimeoutError = (error, signal) =>
   signal.aborted || error?.name === 'AbortError' || error?.name === 'TimeoutError';
 
-const makeRequest = async ({ apiKey, model, method, body, timeoutMs }) => {
+const makeRequest = async ({ apiKey, model, method, body, timeoutMs, simulate429 = false }) => {
   const url = new URL(`${API_BASE_URL}/${encodeURIComponent(model)}:${method}`);
   url.searchParams.set('key', apiKey);
 
@@ -108,12 +110,14 @@ const makeRequest = async ({ apiKey, model, method, body, timeoutMs }) => {
     try {
       let response;
       try {
-        response = await fetch(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal,
-        });
+        response = simulate429
+          ? { status: 429, ok: false, body: null }
+          : await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+          });
       } catch (error) {
         const timedOut = isTimeoutError(error, controller.signal);
         logRequestFailure(timedOut ? 'timeout' : 'network_error', undefined, method, startedAt);
@@ -270,6 +274,11 @@ export const embedTexts = async (texts, taskType) => {
 export const generateJson = async (prompt) => {
   if (typeof prompt !== 'string' || !prompt.trim()) throw new TypeError('prompt must be a non-empty string');
   const configuration = getConfiguration('GEMINI_TEXT_MODEL');
+  const simulateDevelopment429 = process.env.NODE_ENV === 'development'
+    && process.env.GEMINI_DEV_SIMULATE_429 === 'once'
+    && prompt === GEMINI_DEV_SIMULATION_PROMPT
+    && !developmentSimulationConsumed;
+  if (simulateDevelopment429) developmentSimulationConsumed = true;
   Object.assign(geminiGenerationBreaker, getGeminiCircuitBreakerConfig());
   const breakerDecision = geminiGenerationBreaker.acquire();
   if (!breakerDecision.allowed) {
@@ -284,6 +293,7 @@ export const generateJson = async (prompt) => {
       ...configuration,
       method: 'generateContent',
       timeoutMs: GENERATION_TIMEOUT_MS,
+      simulate429: simulateDevelopment429,
       body: {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: 'application/json' },
