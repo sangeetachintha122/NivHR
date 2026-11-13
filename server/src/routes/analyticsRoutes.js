@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { rateLimit } from 'express-rate-limit';
-import { askAnalyticsController } from '../controllers/analyticsController.js';
+import { askAnalyticsController, getAnalyticsConversationController } from '../controllers/analyticsController.js';
 import authenticate from '../middleware/authenticate.js';
 import requireRole from '../middleware/requireRole.js';
 import { createHttpError } from '../services/analyticsService.js';
@@ -18,6 +18,7 @@ const analyticsRateLimit = rateLimit({
 });
 
 router.use(authenticate);
+router.get('/conversation/:id', requireRole('hr'), getAnalyticsConversationController);
 router.post('/ask', requireRole('hr'), analyticsRateLimit, askAnalyticsController);
 
 export default router;

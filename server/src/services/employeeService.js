@@ -1,6 +1,7 @@
 import bcrypt from 'bcryptjs';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
+import { recordActivityEvent } from './activityEventService.js';
 
 const safeEmployeeFields = 'name email role department joinDate isActive createdAt updatedAt';
 
@@ -42,7 +43,7 @@ const findEmployee = async (employeeId) => {
   return employee;
 };
 
-export const createEmployee = async ({ name, email, password, department, joinDate }) => {
+export const createEmployee = async ({ name, email, password, department, joinDate, actorUserId }) => {
   const normalizedEmail = email.trim().toLowerCase();
   if (await User.exists({ email: normalizedEmail })) {
     throw createHttpError(409, 'Email address is already in use');
@@ -61,6 +62,13 @@ export const createEmployee = async ({ name, email, password, department, joinDa
 
   try {
     await employee.save();
+    await recordActivityEvent({
+      eventType: 'employee_created',
+      actorUserId,
+      subjectUserId: employee._id,
+      department: employee.department,
+      changedFields: ['name', 'email', 'department', 'joinDate'],
+    });
     return toSafeEmployee(employee);
   } catch (error) {
     return throwDuplicateEmailError(error);
@@ -107,7 +115,7 @@ export const getEmployeeById = async (employeeId) => {
   return toSafeEmployee(await findEmployee(employeeId));
 };
 
-export const updateEmployee = async (employeeId, updates) => {
+export const updateEmployee = async (employeeId, updates, actorUserId) => {
   validateEmployeeId(employeeId);
   await findEmployee(employeeId);
 
@@ -128,13 +136,20 @@ export const updateEmployee = async (employeeId, updates) => {
       { new: true, runValidators: true },
     ).select(safeEmployeeFields);
     if (!employee) throw createHttpError(404, 'Employee not found');
+    await recordActivityEvent({
+      eventType: 'employee_updated',
+      actorUserId,
+      subjectUserId: employee._id,
+      department: employee.department,
+      changedFields: Object.keys(normalizedUpdates),
+    });
     return toSafeEmployee(employee);
   } catch (error) {
     return throwDuplicateEmailError(error);
   }
 };
 
-export const deactivateEmployee = async (employeeId) => {
+export const deactivateEmployee = async (employeeId, actorUserId) => {
   validateEmployeeId(employeeId);
   const employee = await User.findOneAndUpdate(
     { _id: employeeId, role: 'employee' },
@@ -142,5 +157,12 @@ export const deactivateEmployee = async (employeeId) => {
     { new: true, runValidators: true },
   ).select(safeEmployeeFields);
   if (!employee) throw createHttpError(404, 'Employee not found');
+  await recordActivityEvent({
+    eventType: 'employee_deactivated',
+    actorUserId,
+    subjectUserId: employee._id,
+    department: employee.department,
+    changedFields: ['isActive'],
+  });
   return toSafeEmployee(employee);
 };

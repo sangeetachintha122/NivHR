@@ -3,9 +3,11 @@ import { rateLimit } from 'express-rate-limit';
 import {
   currentUserController,
   loginController,
+  logoutController,
 } from '../controllers/authController.js';
 import authenticate from '../middleware/authenticate.js';
 import { createHttpError } from '../services/authService.js';
+import { recordActivityEvent } from '../services/activityEventService.js';
 
 const router = Router();
 
@@ -25,11 +27,14 @@ const loginRateLimit = rateLimit({
   skip: () => process.env.NODE_ENV === 'development',
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (_req, _res, next) =>
-    next(createHttpError(429, 'Too many login attempts. Please try again later.')),
+  handler: async (_req, _res, next) => {
+    await recordActivityEvent({ eventType: 'login_rate_limited' });
+    return next(createHttpError(429, 'Too many login attempts. Please try again later.'));
+  },
 });
 
 router.post('/login', loginRateLimit, loginController);
 router.get('/me', authenticate, currentUserController);
+router.post('/logout', authenticate, logoutController);
 
 export default router;

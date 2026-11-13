@@ -2,6 +2,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
 import User from '../models/User.js';
+import { recordActivityEvent } from './activityEventService.js';
 
 const validRoles = new Set(['hr', 'employee']);
 const invalidLoginHash = bcrypt.hash('nivhr-invalid-login-placeholder', 10);
@@ -43,6 +44,7 @@ export const login = async ({ email, password }) => {
   const passwordMatches = await bcrypt.compare(password, passwordHash);
 
   if (!user || user.isActive === false || !passwordMatches) {
+    await recordActivityEvent({ eventType: 'login_failed' });
     throw createHttpError(401, 'Invalid email or password');
   }
 
@@ -59,6 +61,13 @@ export const login = async ({ email, password }) => {
       expiresIn: process.env.JWT_EXPIRES_IN || '8h',
     },
   );
+
+  await recordActivityEvent({
+    eventType: 'login_success',
+    actorUserId: user._id,
+    subjectUserId: user._id,
+    department: user.department,
+  });
 
   return { token, user: getSafeUser(user) };
 };

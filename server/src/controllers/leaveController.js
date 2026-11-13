@@ -69,7 +69,7 @@ export const applyForLeaveController = async (req, res, next) => {
   if (!parsed.success) return next(validationError());
 
   try {
-    const leave = await applyForLeave({ employeeId: req.user.id, ...parsed.data });
+    const leave = await applyForLeave({ employeeId: req.user.id, department: req.currentUser.department, ...parsed.data });
     return res.status(201).json({ leave });
   } catch (error) {
     return next(error);
@@ -90,7 +90,7 @@ export const getMyLeavesController = async (req, res, next) => {
 
 export const cancelMyLeaveController = async (req, res, next) => {
   try {
-    const leave = await cancelMyLeave({ leaveId: req.params.id, employeeId: req.user.id });
+    const leave = await cancelMyLeave({ leaveId: req.params.id, employeeId: req.user.id, department: req.currentUser.department });
     return res.status(200).json({ leave });
   } catch (error) {
     return next(error);

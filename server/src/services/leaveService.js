@@ -3,6 +3,8 @@ import { LEAVE_ALLOCATIONS, LEAVE_TYPES } from '../config/leavePolicy.js';
 import LeaveBalance from '../models/LeaveBalance.js';
 import LeaveRequest from '../models/LeaveRequest.js';
 import AuditLog from '../models/AuditLog.js';
+import User from '../models/User.js';
+import { recordActivityEvent } from './activityEventService.js';
 import { calculateDepartmentCapacity } from './capacityService.js';
 import {
   logNotificationFailure,
@@ -125,7 +127,7 @@ const getPendingDays = async (employeeId, type) => {
   return result?.totalDays ?? 0;
 };
 
-export const applyForLeave = async ({ employeeId, type, fromDate, toDate, reason }) => {
+export const applyForLeave = async ({ employeeId, department, type, fromDate, toDate, reason }) => {
   const fromDateOnly = fromDate.toISOString().slice(0, 10);
   const toDateOnly = toDate.toISOString().slice(0, 10);
   if (fromDateOnly < getIndiaCalendarDate()) {
@@ -165,6 +167,15 @@ export const applyForLeave = async ({ employeeId, type, fromDate, toDate, reason
     status: 'pending',
   });
 
+  await recordActivityEvent({
+    eventType: 'leave_applied',
+    actorUserId: employeeId,
+    subjectUserId: employeeId,
+    entityId: leave._id,
+    leaveType: type,
+    department,
+  });
+
   void notifyHrOfLeaveApplication(leave).catch((error) =>
     logNotificationFailure('application', error),
   );
@@ -189,7 +200,7 @@ export const getMyLeaves = async ({ employeeId, status, page, limit }) => {
   };
 };
 
-export const cancelMyLeave = async ({ leaveId, employeeId }) => {
+export const cancelMyLeave = async ({ leaveId, employeeId, department }) => {
   validateObjectId(leaveId, 'leave request ID');
 
   const cancelledLeave = await LeaveRequest.findOneAndUpdate(
@@ -197,7 +208,17 @@ export const cancelMyLeave = async ({ leaveId, employeeId }) => {
     { $set: { status: 'cancelled' } },
     { new: true, runValidators: true },
   );
-  if (cancelledLeave) return toSafeLeave(cancelledLeave);
+  if (cancelledLeave) {
+    await recordActivityEvent({
+      eventType: 'leave_cancelled',
+      actorUserId: employeeId,
+      subjectUserId: employeeId,
+      entityId: cancelledLeave._id,
+      leaveType: cancelledLeave.type,
+      department,
+    });
+    return toSafeLeave(cancelledLeave);
+  }
 
   const existingLeave = await LeaveRequest.findOne({ _id: leaveId, employeeId }).select('_id status');
   if (!existingLeave) throw createHttpError(404, 'Leave request not found');
@@ -269,6 +290,13 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, override
   const leave = await LeaveRequest.findById(leaveId);
   if (!leave) throw createHttpError(404, 'Leave request not found');
   if (leave.status !== 'pending') throw createHttpError(409, 'Leave request has already been processed');
+  let subjectDepartment;
+  try {
+    const subject = await User.findById(leave.employeeId).select('department').lean();
+    subjectDepartment = subject?.department;
+  } catch {
+    // Department is optional event metadata; the leave decision must not depend on it.
+  }
 
   const reviewedAt = new Date();
   if (decision === 'rejected') {
@@ -278,6 +306,15 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, override
       { new: true, runValidators: true },
     );
     if (!rejectedLeave) throw createHttpError(409, 'Leave request has already been processed');
+
+    await recordActivityEvent({
+      eventType: 'leave_rejected',
+      actorUserId: reviewedBy,
+      subjectUserId: rejectedLeave.employeeId,
+      entityId: rejectedLeave._id,
+      leaveType: rejectedLeave.type,
+      department: subjectDepartment,
+    });
 
     void notifyEmployeeLeaveRejected(rejectedLeave).catch((error) =>
       logNotificationFailure('rejected', error),
@@ -357,6 +394,15 @@ export const decideLeave = async ({ leaveId, decision, rejectionReason, override
       department: departmentCapacity.department,
     });
   }
+
+  await recordActivityEvent({
+    eventType: 'leave_approved',
+    actorUserId: reviewedBy,
+    subjectUserId: approvedLeave.employeeId,
+    entityId: approvedLeave._id,
+    leaveType: approvedLeave.type,
+    department: subjectDepartment,
+  });
 
   void notifyEmployeeLeaveApproved(approvedLeave).catch((error) =>
     logNotificationFailure('approved', error),

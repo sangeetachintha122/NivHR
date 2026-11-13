@@ -48,7 +48,7 @@ export const createEmployeeController = async (req, res, next) => {
   if (!parsed.success) return sendValidationError(next);
 
   try {
-    const employee = await createEmployee(parsed.data);
+    const employee = await createEmployee({ ...parsed.data, actorUserId: req.user.id });
     return res.status(201).json({ employee });
   } catch (error) {
     return next(error);
@@ -81,7 +81,7 @@ export const updateEmployeeController = async (req, res, next) => {
   if (!parsed.success) return sendValidationError(next);
 
   try {
-    const employee = await updateEmployee(req.params.id, parsed.data);
+    const employee = await updateEmployee(req.params.id, parsed.data, req.user.id);
     return res.status(200).json({ employee });
   } catch (error) {
     return next(error);
@@ -90,7 +90,7 @@ export const updateEmployeeController = async (req, res, next) => {
 
 export const deactivateEmployeeController = async (req, res, next) => {
   try {
-    const employee = await deactivateEmployee(req.params.id);
+    const employee = await deactivateEmployee(req.params.id, req.user.id);
     return res.status(200).json({ employee });
   } catch (error) {
     return next(error);
