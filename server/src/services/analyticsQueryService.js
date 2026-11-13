@@ -236,6 +236,17 @@ const groupBy = (records, selector) => {
 
 const sortedGroups = (groups) => groups.sort((left, right) => right.value - left.value || left.label.localeCompare(right.label));
 
+export const summarizeHighestLateArrivalsByDepartment = (groups) => {
+  const highestCount = Math.max(0, ...groups.map(({ late = 0 }) => late));
+  if (highestCount === 0) return 'No late arrivals were recorded.';
+  const departments = groups
+    .filter(({ late = 0 }) => late === highestCount)
+    .map(({ label }) => label)
+    .sort((left, right) => left.localeCompare(right));
+  const departmentLabel = departments.length > 1 ? 'The departments' : 'The department';
+  return `${departmentLabel} ${departments.join(', ')} had the most late arrivals (${highestCount}).`;
+};
+
 const executeEmployees = async (operation, range) => {
   const { capability, filters, limit } = operation;
   if (capability === 'employee_count_by_department') {
@@ -333,8 +344,10 @@ const executeAttendance = async (operation, range) => {
       if (record.checkOut) entry.checkedOut += 1;
       groupsMap.set(department, entry);
     }
-    const groups = sortedGroups([...groupsMap.values()]).slice(0, limit);
-    return makeResult({ capability, title: 'Attendance by Department', summary: `Attendance grouped by department from ${dateLabel}.`, columns: ['Department', 'Check-ins', 'Late', 'Checked out'], rows: groups.map(({ label, value, late, checkedOut }) => [label, value, late, checkedOut]), chartType: 'bar', chartData: groups.map(({ label, value }) => ({ label, value })), groups });
+    const allGroups = [...groupsMap.values()];
+    const topLateSummary = summarizeHighestLateArrivalsByDepartment(allGroups);
+    const groups = sortedGroups(allGroups).slice(0, limit);
+    return makeResult({ capability, title: 'Attendance by Department', summary: `Attendance grouped by department from ${dateLabel}. ${topLateSummary}`, columns: ['Department', 'Check-ins', 'Late', 'Checked out'], rows: groups.map(({ label, value, late, checkedOut }) => [label, value, late, checkedOut]), chartType: 'bar', chartData: groups.map(({ label, value }) => ({ label, value })), groups });
   }
 
   const byDate = new Map();
@@ -524,7 +537,8 @@ const executeActivity = async (operation, range) => {
     return makeResult({ capability, title: 'Activity by Actor', summary: `Recorded events grouped by actor from ${dateLabel}. Failed login attempts are included only in the anonymous group.`, columns: ['Actor', 'Events'], rows: groups.map(({ label, value }) => [label, value]), chartType: 'bar', chartData: groups.map(({ label, value }) => ({ label, value })), groups });
   }
 
-  const rows = selected.slice(0, limit).map((event) => [
+  const visibleEvents = selected.slice(0, limit);
+  const rows = visibleEvents.map((event) => [
     formatTimestampIST(event.occurredAt),
     event.eventType.replaceAll('_', ' '),
     event.actorUserId?.name || 'Unknown / unauthenticated',
@@ -533,13 +547,23 @@ const executeActivity = async (operation, range) => {
     event.leaveType || '—',
     (event.changedFields || []).join(', ') || '—',
   ]);
-  return makeResult({
+  const result = makeResult({
     capability,
     title: 'Recorded HR Activity',
     summary: `${selected.length} stored events from ${dateLabel}; only event metadata and changed field names are shown. Earlier events were not recorded.`,
     columns: ['Time (IST)', 'Event', 'Actor', 'Subject', 'Department', 'Leave type', 'Changed fields'],
     rows,
   });
+  return {
+    ...result,
+    _activityMetadata: {
+      totalCount: selected.length,
+      rowSortKeys: visibleEvents.map((event) => ({
+        occurredAt: new Date(event.occurredAt).getTime(),
+        id: event._id.toString(),
+      })),
+    },
+  };
 };
 
 const executeSingleCapability = async (operation, range, now) => {
@@ -598,6 +622,46 @@ export const combineGroupedResults = (results, combineBy) => {
   });
 };
 
+export const combineEmployeeRecordActivityResults = (operations, results, now = new Date()) => {
+  if (operations.length !== 2 || results.length !== 2) return results;
+
+  const createdIndex = operations.findIndex(({ capability, filters, compareRange }) =>
+    capability === 'hr_activity' && !compareRange
+    && filters.eventType === 'employee_created' && Object.keys(filters).length === 1);
+  const updatedIndex = operations.findIndex(({ capability, filters, compareRange }) =>
+    capability === 'hr_activity' && !compareRange
+    && filters.eventType === 'employee_updated' && Object.keys(filters).length === 1);
+  if (createdIndex < 0 || updatedIndex < 0
+    || JSON.stringify(operations[createdIndex].range) !== JSON.stringify(operations[updatedIndex].range)) return results;
+
+  const created = results[createdIndex];
+  const updated = results[updatedIndex];
+  if (!created?._activityMetadata || !updated?._activityMetadata
+    || created.capability !== 'hr_activity' || updated.capability !== 'hr_activity'
+    || JSON.stringify(created.table?.columns) !== JSON.stringify(updated.table?.columns)) return results;
+
+  const rows = [
+    ...created.table.rows.map((row, index) => ({ row, ...created._activityMetadata.rowSortKeys[index] })),
+    ...updated.table.rows.map((row, index) => ({ row, ...updated._activityMetadata.rowSortKeys[index] })),
+  ].sort((left, right) => right.occurredAt - left.occurredAt || right.id.localeCompare(left.id));
+  const totalCreated = created._activityMetadata.totalCount;
+  const totalUpdated = updated._activityMetadata.totalCount;
+  const range = resolveDateRange(operations[createdIndex].range, now);
+  const limit = Math.min(operations[createdIndex].limit, operations[updatedIndex].limit);
+  const combined = makeResult({
+    capability: 'hr_activity',
+    title: 'Recorded HR Activity',
+    summary: `${totalCreated + totalUpdated} total events found from ${formatDateRange(range)}: ${totalCreated} employee creation events and ${totalUpdated} employee update events.`,
+    columns: created.table.columns,
+    rows: rows.slice(0, limit).map(({ row }) => row),
+  });
+  combined.presentation = 'combined_employee_activity';
+  if (totalCreated + totalUpdated === 0) {
+    combined.table.emptyMessage = 'No employee creation or update activity was recorded during this period.';
+  }
+  return [combined];
+};
+
 export const executeAnalyticsPlan = async (plan, { now = new Date() } = {}) => {
   const results = [];
   for (const operation of plan.operations) {
@@ -612,5 +676,6 @@ export const executeAnalyticsPlan = async (plan, { now = new Date() } = {}) => {
     }
   }
   const combined = combineGroupedResults(results, plan.combineBy);
-  return combined ? [combined] : results;
+  if (combined) return [combined];
+  return combineEmployeeRecordActivityResults(plan.operations, results, now);
 };

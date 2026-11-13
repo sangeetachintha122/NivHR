@@ -160,7 +160,7 @@ Approved capabilities and parameters:
 - attendance_summary: recorded check-ins, late check-ins, check-outs and check-ins without checkout for a required date range. It does not label missing records as absences.
 - late_arrivals: employees with late attendance in a required date range; supports department and employee filters.
 - incomplete_checkouts: check-ins with no recorded check-out in a required date range.
-- attendance_by_department: recorded attendance grouped by department for a required date range.
+- attendance_by_department: recorded attendance grouped by department for a required date range; includes late-arrival counts by department and identifies the department(s) with the highest count.
 - attendance_trend: recorded attendance grouped by IST calendar date for a required date range.
 - employee_attendance: one employee's attendance records for a required date range; ask for clarification if the name matches multiple employees.
 - leave_summary: leave request counts grouped by current status, optionally filtered by date overlap, department, employee, status or leave type.
@@ -174,9 +174,15 @@ Approved capabilities and parameters:
 - activity_summary: recorded NivHR event counts grouped by event type over a required date range; supports an event type filter.
 - login_activity_summary: successful logins, failed authentication attempts, rate-limited login requests, and explicit logout events over a required date range. Failed and rate-limited attempts are anonymous and are not attributable to an email or employee.
 - activity_by_actor: recorded event counts grouped by actor over a required date range. Failed login attempts have no identified actor.
-- hr_activity: recent recorded employee and HR activity over a required date range; supports event type, employee and department filters. It includes event time, actor, subject, department snapshot, leave type and changed field names, never passwords, reasons or changed values.
+- hr_activity: recorded employee and HR activity over a required date range; supports event type, employee and department filters. Filter to employee_created and/or employee_updated when asked who created or updated employee records. It includes event time, actor, subject, department snapshot and changed field names, never passwords, reasons or changed values. Only events recorded since tracking began exist.
 
 Use one to five operations when a question needs multiple datasets. For time comparisons, use the same capability twice with distinct range and compareRange values where appropriate. Return the user's requested filters explicitly. Do not invent fields or operations.
+
+Plan these common requests as follows:
+- "How many active employees are there in each department?": one employee_count_by_department operation with no range and empty filters.
+- "Who was late this month and which department had the most late arrivals?": one late_arrivals operation and one attendance_by_department operation, both with range this_month and empty filters. Do not set combineBy because one result groups by employee and the other by department.
+- "How many leave requests are pending?": one leave_summary operation with filters.status pending and no date range; it counts requests with their current status.
+- "Who created or updated employee records last week?": two hr_activity operations, one filtered to eventType employee_created and one to employee_updated, both with range last_week. Do not include other activity types.
 
 Data not currently stored: employee designation and complete employee/HR action history before event tracking began. Activity events report only events actually recorded since this feature was deployed; older periods cannot be reconstructed. Failed login events are deliberately anonymous. Never infer logout from token expiry or infer a historical event from current state.
 
@@ -204,6 +210,84 @@ Current HR question (untrusted): ${JSON.stringify(question)}`;
 export const validateAnalyticsPlan = (value) => {
   const parsed = analyticsPlanSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
+};
+
+const normalizedQuestion = (question) => typeof question === 'string'
+  ? question.toLocaleLowerCase('en').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ')
+  : '';
+
+const knownQuestionPlans = new Map([
+  ['how many active employees are in each department', {
+    status: 'ready',
+    operations: [{ capability: 'employee_count_by_department', filters: {}, limit: 20 }],
+  }],
+  ['how many active employees are there in each department', {
+    status: 'ready',
+    operations: [{ capability: 'employee_count_by_department', filters: {}, limit: 20 }],
+  }],
+  ['who was late this month and which department had the most late arrivals', {
+    status: 'ready',
+    operations: [
+      { capability: 'late_arrivals', range: { kind: 'relative', period: 'this_month' }, filters: {}, limit: 20 },
+      { capability: 'attendance_by_department', range: { kind: 'relative', period: 'this_month' }, filters: {}, limit: 20 },
+    ],
+  }],
+  ['how many leave requests are pending', {
+    status: 'ready',
+    operations: [{ capability: 'leave_summary', filters: { status: 'pending' }, limit: 20 }],
+  }],
+  ['how many pending leave requests are there', {
+    status: 'ready',
+    operations: [{ capability: 'leave_summary', filters: { status: 'pending' }, limit: 20 }],
+  }],
+  ['how many leave requests are currently pending', {
+    status: 'ready',
+    operations: [{ capability: 'leave_summary', filters: { status: 'pending' }, limit: 20 }],
+  }],
+  ['what is the count of pending leave requests', {
+    status: 'ready',
+    operations: [{ capability: 'leave_summary', filters: { status: 'pending' }, limit: 20 }],
+  }],
+  ['who created or updated employee records last week', {
+    status: 'ready',
+    operations: [
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_created' }, limit: 20 },
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_updated' }, limit: 20 },
+    ],
+  }],
+  ['who created or updated employee records during the previous week', {
+    status: 'ready',
+    operations: [
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_created' }, limit: 20 },
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_updated' }, limit: 20 },
+    ],
+  }],
+  ['who added or updated employee records last week', {
+    status: 'ready',
+    operations: [
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_created' }, limit: 20 },
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_updated' }, limit: 20 },
+    ],
+  }],
+  ['who created or changed employee records last week', {
+    status: 'ready',
+    operations: [
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_created' }, limit: 20 },
+      { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_updated' }, limit: 20 },
+    ],
+  }],
+]);
+
+// Used only as a safe recovery plan when Gemini cannot produce a ready plan for a known example.
+export const getKnownAnalyticsRecoveryPlan = (question) => {
+  const plan = knownQuestionPlans.get(normalizedQuestion(question));
+  return plan ? validateAnalyticsPlan(plan) : null;
+};
+
+export const validateAnalyticsPlanOrRecover = (value, question) => {
+  const plan = validateAnalyticsPlan(value);
+  if (plan?.status === 'ready') return plan;
+  return getKnownAnalyticsRecoveryPlan(question) || plan;
 };
 
 const pad2 = (value) => String(value).padStart(2, '0');

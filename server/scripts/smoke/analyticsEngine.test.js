@@ -2,8 +2,10 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildAnalyticsPlanPrompt,
+  getKnownAnalyticsRecoveryPlan,
   resolveDateRange,
   validateAnalyticsPlan,
+  validateAnalyticsPlanOrRecover,
 } from '../../src/services/analyticsPlanService.js';
 import {
   appendAnalyticsTurn,
@@ -17,10 +19,32 @@ import { normalizeMongoDatabaseIdentity, validateIsolatedMongoUri } from './data
 import {
   approvedLeaveDaysInRange,
   combineGroupedResults,
+  combineEmployeeRecordActivityResults,
+  summarizeHighestLateArrivalsByDepartment,
   toIstInstantRange,
 } from '../../src/services/analyticsQueryService.js';
 
 const asDate = (value) => new Date(`${value}T00:00:00.000Z`);
+
+const employeeActivityOperations = (limit = 20) => [
+  { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_created' }, limit },
+  { capability: 'hr_activity', range: { kind: 'relative', period: 'last_week' }, filters: { eventType: 'employee_updated' }, limit },
+];
+
+const employeeActivityResult = (eventType, events, totalCount = events.length) => ({
+  capability: 'hr_activity',
+  title: 'Recorded HR Activity',
+  summary: 'Synthetic activity result.',
+  columns: ['Time (IST)', 'Event', 'Actor', 'Subject', 'Department', 'Leave type', 'Changed fields'],
+  table: {
+    columns: ['Time (IST)', 'Event', 'Actor', 'Subject', 'Department', 'Leave type', 'Changed fields'],
+    rows: events.map(({ time }) => [time, eventType.replaceAll('_', ' '), 'Synthetic HR', 'Synthetic employee', 'Synthetic', '—', 'department']),
+  },
+  _activityMetadata: {
+    totalCount,
+    rowSortKeys: events.map(({ occurredAt, id }) => ({ occurredAt: new Date(occurredAt).getTime(), id })),
+  },
+});
 
 test('analytics plan accepts composed, allowlisted cross-module operations', () => {
   const plan = validateAnalyticsPlan({
@@ -71,6 +95,180 @@ test('analytics planner prompt describes missing records and asks Gemini for dat
   assert.match(prompt, /Use ISO weeks/);
   assert.match(prompt, /Reference date in Asia\/Kolkata: 2026-07-06/);
   assert.match(prompt, /"period":"this_month"/);
+});
+
+test('known active employee department questions recover to the validated grouped-count plan', () => {
+  const expected = {
+    status: 'ready',
+    operations: [{ capability: 'employee_count_by_department', filters: {}, limit: 20 }],
+  };
+
+  assert.deepEqual(getKnownAnalyticsRecoveryPlan('How many active employees are in each department?'), expected);
+  assert.deepEqual(getKnownAnalyticsRecoveryPlan('How many active employees are there in each department?'), expected);
+  assert.ok(validateAnalyticsPlan(expected));
+  assert.deepEqual(validateAnalyticsPlanOrRecover({ status: 'unsupported', message: 'not understood' }, 'How many active employees are there in each department?'), expected);
+  assert.deepEqual(validateAnalyticsPlanOrRecover({ status: 'ready', operations: [{ capability: 'unknown_query' }] }, 'How many active employees are there in each department?'), expected);
+  assert.equal(validateAnalyticsPlanOrRecover({ status: 'ready', operations: [{ capability: 'unknown_query' }] }, 'An arbitrary unsupported analytics request'), null);
+});
+
+test('late employee and top department question recovers to two validated this-month operations', () => {
+  const expected = {
+    status: 'ready',
+    operations: [
+      { capability: 'late_arrivals', range: { kind: 'relative', period: 'this_month' }, filters: {}, limit: 20 },
+      { capability: 'attendance_by_department', range: { kind: 'relative', period: 'this_month' }, filters: {}, limit: 20 },
+    ],
+  };
+  const plan = getKnownAnalyticsRecoveryPlan('Who was late this month and which department had the most late arrivals?');
+
+  assert.deepEqual(plan, expected);
+  assert.ok(validateAnalyticsPlan(plan));
+  assert.equal(plan.combineBy, undefined);
+  assert.deepEqual(validateAnalyticsPlanOrRecover({ status: 'unsupported', message: 'not understood' }, 'Who was late this month and which department had the most late arrivals?'), expected);
+});
+
+test('this month resolves by Asia/Kolkata even across a UTC month boundary', () => {
+  const range = resolveDateRange({ kind: 'relative', period: 'this_month' }, new Date('2026-02-28T20:00:00.000Z'));
+  assert.deepEqual(range, { from: '2026-03-01', to: '2026-03-31' });
+});
+
+test('department attendance summary names the department with most late arrivals, including ties', () => {
+  assert.equal(
+    summarizeHighestLateArrivalsByDepartment([
+      { label: 'Engineering', late: 2 },
+      { label: 'People', late: 5 },
+      { label: 'Sales', late: 5 },
+    ]),
+    'The departments People, Sales had the most late arrivals (5).',
+  );
+  assert.equal(summarizeHighestLateArrivalsByDepartment([{ label: 'People', late: 0 }]), 'No late arrivals were recorded.');
+});
+
+test('planner prompt explains how to plan the two common department analytics questions', () => {
+  const prompt = buildAnalyticsPlanPrompt('Who was late this month and which department had the most late arrivals?');
+  assert.match(prompt, /one late_arrivals operation and one attendance_by_department operation/);
+  assert.match(prompt, /Do not set combineBy/);
+  assert.match(prompt, /identifies the department\(s\) with the highest count/);
+});
+
+test('pending leave suggestions recover to a validated current-status count plan', () => {
+  const expected = {
+    status: 'ready',
+    operations: [{ capability: 'leave_summary', filters: { status: 'pending' }, limit: 20 }],
+  };
+  const questions = [
+    'How many leave requests are pending?',
+    'How many pending leave requests are there?',
+    'How many leave requests are currently pending?',
+    'What is the count of pending leave requests?',
+  ];
+
+  for (const question of questions) {
+    assert.deepEqual(getKnownAnalyticsRecoveryPlan(question), expected);
+    assert.deepEqual(validateAnalyticsPlanOrRecover({ status: 'unsupported', message: 'not understood' }, question), expected);
+  }
+  assert.ok(validateAnalyticsPlan(expected));
+  assert.equal(getKnownAnalyticsRecoveryPlan('How many leave requests were pending last year?'), null);
+});
+
+test('employee record activity suggestions recover only created and updated events for last week', () => {
+  const expected = {
+    status: 'ready',
+    operations: ['employee_created', 'employee_updated'].map((eventType) => ({
+      capability: 'hr_activity',
+      range: { kind: 'relative', period: 'last_week' },
+      filters: { eventType },
+      limit: 20,
+    })),
+  };
+  const questions = [
+    'Who created or updated employee records last week?',
+    'Who created or updated employee records during the previous week?',
+    'Who added or updated employee records last week?',
+    'Who created or changed employee records last week?',
+  ];
+
+  for (const question of questions) {
+    const plan = getKnownAnalyticsRecoveryPlan(question);
+    assert.deepEqual(plan, expected);
+    assert.deepEqual(validateAnalyticsPlanOrRecover({ status: 'unsupported', message: 'not understood' }, question), expected);
+    assert.ok(validateAnalyticsPlan(plan));
+  }
+  assert.deepEqual(
+    resolveDateRange(expected.operations[0].range, new Date('2026-07-08T12:00:00.000Z')),
+    { from: '2026-06-29', to: '2026-07-05' },
+  );
+  assert.equal(getKnownAnalyticsRecoveryPlan('Who updated employee records in a date range?'), null);
+});
+
+test('planner prompt documents pending leave and employee-record event operations accurately', () => {
+  const prompt = buildAnalyticsPlanPrompt('Who created or updated employee records last week?');
+  assert.match(prompt, /one leave_summary operation with filters\.status pending and no date range/);
+  assert.match(prompt, /two hr_activity operations, one filtered to eventType employee_created and one to employee_updated/);
+  assert.match(prompt, /Do not include other activity types/);
+  assert.match(prompt, /Only events recorded since tracking began exist/);
+});
+
+test('employee creation and update activity combine into one sorted frontend result with total counts', () => {
+  const operations = employeeActivityOperations(3);
+  const created = employeeActivityResult('employee_created', [
+    { time: '01/07/2026, 09:00', occurredAt: '2026-07-01T03:30:00.000Z', id: '100' },
+    { time: '02/07/2026, 09:00', occurredAt: '2026-07-02T03:30:00.000Z', id: '200' },
+  ], 3);
+  const updated = employeeActivityResult('employee_updated', [
+    { time: '03/07/2026, 09:00', occurredAt: '2026-07-03T03:30:00.000Z', id: '300' },
+    { time: '03/07/2026, 09:00', occurredAt: '2026-07-03T03:30:00.000Z', id: '400' },
+  ], 4);
+
+  const results = combineEmployeeRecordActivityResults(operations, [created, updated], new Date('2026-07-08T12:00:00.000Z'));
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].presentation, 'combined_employee_activity');
+  assert.equal(results[0].title, 'Recorded HR Activity');
+  assert.equal(results[0].summary, '7 total events found from 2026-06-29 through 2026-07-05 (Asia/Kolkata): 3 employee creation events and 4 employee update events.');
+  assert.deepEqual(results[0].table.rows.map(([time, event]) => [time, event]), [
+    ['03/07/2026, 09:00', 'employee updated'],
+    ['03/07/2026, 09:00', 'employee updated'],
+    ['02/07/2026, 09:00', 'employee created'],
+  ]);
+  assert.equal(results[0].table.columns.length, 7);
+});
+
+test('combined employee activity handles creation-only and update-only records', () => {
+  const operations = employeeActivityOperations();
+  const createdOnly = combineEmployeeRecordActivityResults(operations, [
+    employeeActivityResult('employee_created', [{ time: '01/07/2026, 09:00', occurredAt: '2026-07-01T03:30:00Z', id: '100' }]),
+    employeeActivityResult('employee_updated', []),
+  ], new Date('2026-07-08T12:00:00.000Z'))[0];
+  const updatedOnly = combineEmployeeRecordActivityResults(operations, [
+    employeeActivityResult('employee_created', []),
+    employeeActivityResult('employee_updated', [{ time: '02/07/2026, 09:00', occurredAt: '2026-07-02T03:30:00Z', id: '200' }]),
+  ], new Date('2026-07-08T12:00:00.000Z'))[0];
+
+  assert.equal(createdOnly.table.rows.length, 1);
+  assert.match(createdOnly.summary, /1 total events found.*1 employee creation events and 0 employee update events/);
+  assert.equal(updatedOnly.table.rows.length, 1);
+  assert.match(updatedOnly.summary, /1 total events found.*0 employee creation events and 1 employee update events/);
+});
+
+test('combined employee activity shows one clear empty state when both event types are empty', () => {
+  const [result] = combineEmployeeRecordActivityResults(employeeActivityOperations(), [
+    employeeActivityResult('employee_created', []),
+    employeeActivityResult('employee_updated', []),
+  ], new Date('2026-07-08T12:00:00.000Z'));
+
+  assert.equal(result.table.rows.length, 0);
+  assert.equal(result.table.emptyMessage, 'No employee creation or update activity was recorded during this period.');
+  assert.match(result.summary, /^0 total events found from 2026-06-29 through 2026-07-05/);
+});
+
+test('employee activity combination leaves unrelated analytics result arrays unchanged', () => {
+  const unrelatedResults = [{ capability: 'leave_summary', title: 'Leave Requests' }];
+  const returned = combineEmployeeRecordActivityResults([
+    { capability: 'leave_summary', range: null, filters: { status: 'pending' }, limit: 20 },
+  ], unrelatedResults);
+
+  assert.strictEqual(returned, unrelatedResults);
 });
 
 test('activity analytics require a range and use the event allowlist', () => {

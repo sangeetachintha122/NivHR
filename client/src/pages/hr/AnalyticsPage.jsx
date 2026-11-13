@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Activity, BarChart3, LoaderCircle, PieChart as PieChartIcon, Send, Sparkles } from 'lucide-react';
+import { Activity, BarChart3, ChevronDown, LoaderCircle, PieChart as PieChartIcon, Send, Sparkles } from 'lucide-react';
 import {
   Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
@@ -55,7 +55,7 @@ function ResultsTable({ table }) {
         {table.rows.map((row, rowIndex) => <tr key={`row-${rowIndex}`} className="text-xs">
           {row.map((value, columnIndex) => <td key={`${rowIndex}-${columnIndex}`} className={`px-4 py-3.5 ${columnIndex === 0 ? 'font-semibold text-[#475268]' : 'text-[#59647a]'}`}>{value}</td>)}
         </tr>)}
-        {table.rows.length === 0 && <tr><td colSpan={table.columns.length} className="px-4 py-8 text-center text-xs text-[#8992a3]">No matching records.</td></tr>}
+        {table.rows.length === 0 && <tr><td colSpan={table.columns.length} className="px-4 py-8 text-center text-xs text-[#8992a3]">{table.emptyMessage || 'No matching records.'}</td></tr>}
       </tbody>
     </table>
   </div>;
@@ -75,6 +75,46 @@ function AnalyticsResult({ result }) {
   </div>;
 }
 
+function ProviderLabel({ provider }) {
+  const labels = { gemini: 'Gemini', cloudflare: 'Cloudflare' };
+  const label = labels[provider];
+  if (!label) return null;
+
+  return <span className="rounded-full border border-[#e7e5fa] bg-white px-2 py-0.5 text-[10px] font-medium text-[#766bbd]">{label}</span>;
+}
+
+function ConversationMessage({ role, content, provider }) {
+  const isUser = role === 'user';
+  return <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`max-w-[92%] rounded-2xl px-3.5 py-3 sm:max-w-[82%] ${isUser ? 'rounded-br-md bg-[#f1efff] text-[#48416f]' : 'rounded-bl-md border border-[#eceef3] bg-white text-[#4d586d]'}`}>
+      <div className={`mb-1.5 flex items-center gap-2 ${isUser ? 'justify-end' : 'justify-start'}`}>
+        <span className="text-[10px] font-bold uppercase tracking-wide text-[#929bad]">{isUser ? 'You' : 'NivHR Analytics'}</span>
+        {!isUser && <ProviderLabel provider={provider} />}
+      </div>
+      <p className="whitespace-pre-wrap text-xs leading-5 sm:text-sm">{content}</p>
+    </div>
+  </div>;
+}
+
+function PreviousQuestions({ messages }) {
+  const olderQuestionCount = messages.filter(({ role }) => role === 'user').length;
+  if (!olderQuestionCount) return null;
+
+  return <details className="group mt-3 border-t border-[#eff0f4] pt-3">
+    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-xs font-semibold text-[#687389] marker:hidden">
+      <span>Previous questions <span className="ml-1 font-normal text-[#9aa2b1]">({olderQuestionCount})</span></span>
+      <ChevronDown className="h-4 w-4 shrink-0 text-[#929bad] transition-transform group-open:rotate-180" />
+    </summary>
+    <div className="mt-3 max-h-80 space-y-3 overflow-y-auto pr-1">
+      {messages.map((message, index) => <ConversationMessage
+        key={`${message.role}-${index}`}
+        role={message.role}
+        content={message.content}
+      />)}
+    </div>
+  </details>;
+}
+
 export default function AnalyticsPage() {
   const [question, setQuestion] = useState('');
   const [result, setResult] = useState(null);
@@ -82,6 +122,7 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState(() => sessionStorage.getItem(CONVERSATION_STORAGE_KEY));
   const [conversationHistory, setConversationHistory] = useState([]);
+  const [answeredQuestion, setAnsweredQuestion] = useState('');
 
   useEffect(() => {
     if (!conversationId) return;
@@ -102,6 +143,7 @@ export default function AnalyticsPage() {
     try {
       const response = await askAnalytics(trimmedQuestion, conversationId);
       setResult(response);
+      setAnsweredQuestion(trimmedQuestion);
       setConversationId(response.conversationId);
       sessionStorage.setItem(CONVERSATION_STORAGE_KEY, response.conversationId);
       setConversationHistory(response.conversationHistory || []);
@@ -119,8 +161,18 @@ export default function AnalyticsPage() {
     setConversationHistory([]);
     setQuestion('');
     setResult(null);
+    setAnsweredQuestion('');
     setError('');
   };
+
+  const latestQuestion = result
+    ? answeredQuestion
+    : [...conversationHistory].reverse().find(({ role }) => role === 'user')?.content;
+  const hasCombinedEmployeeActivity = result?.results?.some(({ presentation }) => presentation === 'combined_employee_activity');
+  const latestAnswer = result
+    ? (hasCombinedEmployeeActivity ? 'Combined activity results are shown below.' : result.supported ? result.answer : result.message)
+    : [...conversationHistory].reverse().find(({ role }) => role === 'assistant')?.content;
+  const previousMessages = conversationHistory.slice(0, -2);
 
   return <>
     <PageHeader eyebrow="People insights" title="HR Analytics" description="Ask follow-up questions about workforce, leave, attendance, and recorded HR activity." />
@@ -155,9 +207,12 @@ export default function AnalyticsPage() {
 
     {loading && <Card className="mb-5 flex items-center justify-center gap-2 p-8 text-sm text-[#7c8698]" role="status"><LoaderCircle className="h-4 w-4 animate-spin text-[#6557d9]" />Interpreting the question and analyzing records…</Card>}
 
-    {conversationHistory.length > (result ? 2 : 0) && <Card className="mb-5 space-y-3 p-4 sm:p-5" aria-label="Earlier conversation turns">
-      <p className="text-[10px] font-bold uppercase tracking-[.1em] text-[#929bad]">Recent conversation</p>
-      {(result ? conversationHistory.slice(0, -2) : conversationHistory).map((message, index) => <div key={`${message.role}-${index}`} className={`rounded-xl p-3 text-xs leading-5 ${message.role === 'user' ? 'ml-6 bg-[#f1efff] text-[#48416f]' : 'mr-6 bg-[#f7f8fa] text-[#59647a]'}`}><span className="mb-1 block text-[10px] font-bold uppercase text-[#858fa2]">{message.role === 'user' ? 'You' : 'NivHR Analytics'}</span>{message.content}</div>)}
+    {latestQuestion && latestAnswer && <Card className="mb-5 p-4 sm:p-5" aria-label="Latest analytics conversation">
+      <div className="space-y-3">
+        <ConversationMessage role="user" content={latestQuestion} />
+        <ConversationMessage role="assistant" content={latestAnswer} provider={result?.provider} />
+      </div>
+      <PreviousQuestions messages={previousMessages} />
     </Card>}
 
     {result?.supported === false && <Card className="p-5 sm:p-6">
@@ -169,7 +224,7 @@ export default function AnalyticsPage() {
     </Card>}
 
     {result?.supported === true && <>
-      <Card className="mb-5 p-5 sm:p-6"><h2 className="mb-2 text-sm font-bold text-[#303a4d]">Answer</h2><p className="text-sm leading-6 text-[#48416f]">{result.answer}</p></Card>
+      {!hasCombinedEmployeeActivity && <Card className="mb-5 p-5 sm:p-6"><h2 className="mb-2 text-sm font-bold text-[#303a4d]">Answer</h2><p className="text-sm leading-6 text-[#48416f]">{result.answer}</p></Card>}
       <div className="space-y-5">{(result.results?.length ? result.results : [result]).map((item, index) => <AnalyticsResult key={`${item.capability || item.intent}-${index}`} result={item} />)}</div>
     </>}
   </>;

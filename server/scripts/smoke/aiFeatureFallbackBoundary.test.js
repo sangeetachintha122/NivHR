@@ -7,6 +7,7 @@ import DepartmentCapacity from '../../src/models/DepartmentCapacity.js';
 import LeaveBalance from '../../src/models/LeaveBalance.js';
 import LeaveRequest from '../../src/models/LeaveRequest.js';
 import PolicyChunk from '../../src/models/PolicyChunk.js';
+import PolicyDoc from '../../src/models/PolicyDoc.js';
 import User from '../../src/models/User.js';
 import { answerPolicyQuestion } from '../../src/services/policyService.js';
 import { reviewLeaveRequest } from '../../src/services/leaveReviewService.js';
@@ -40,11 +41,13 @@ const enableMockedProviders = (t) => {
   });
 };
 
-const mockFetch = (t, invalidGenerationJson) => {
+const mockFetch = (t, invalidGenerationJson, policySearchPlan) => {
   const hosts = [];
+  const requests = [];
   t.mock.method(globalThis, 'fetch', async (url, options) => {
     const target = new URL(url);
     hosts.push(target.hostname);
+    requests.push({ host: target.hostname, pathname: target.pathname });
     if (target.hostname === 'api.cloudflare.com') {
       return new Response(JSON.stringify({ success: true, result: { response: '{}' } }));
     }
@@ -53,12 +56,17 @@ const mockFetch = (t, invalidGenerationJson) => {
       const count = body.requests?.length || 6;
       return new Response(JSON.stringify({ embeddings: Array.from({ length: count }, () => ({ values: [1, 0] })) }));
     }
+    if (policySearchPlan && JSON.parse(options.body).contents?.[0]?.parts?.[0]?.text?.includes('Policy search planning task.')) {
+      return new Response(JSON.stringify({
+        candidates: [{ content: { parts: [{ text: JSON.stringify(policySearchPlan) }] } }],
+      }));
+    }
     return new Response(JSON.stringify({
       candidates: [{ content: { parts: [{ text: invalidGenerationJson }] } }],
     }));
   });
   t.mock.method(AIUsageDaily, 'findOneAndUpdate', async () => ({ _id: 'test-only', count: 1 }));
-  return hosts;
+  return { hosts, requests };
 };
 
 const queryWithLean = (value) => ({
@@ -70,7 +78,11 @@ const queryWithLean = (value) => ({
 
 test('Policy Assistant Zod rejection does not trigger provider fallback', async (t) => {
   enableMockedProviders(t);
-  const hosts = mockFetch(t, '{"unexpected":"invalid policy response"}');
+  const { hosts, requests } = mockFetch(
+    t,
+    '{"unexpected":"invalid policy response"}',
+    { inScope: true, searchQueries: [] },
+  );
   const policyChunk = {
     _id: new mongoose.Types.ObjectId(),
     docId: { title: 'Synthetic policy' },
@@ -79,6 +91,10 @@ test('Policy Assistant Zod rejection does not trigger provider fallback', async 
     embedding: [1, 0],
   };
   t.mock.method(PolicyChunk, 'find', () => queryWithLean([policyChunk]));
+  t.mock.method(PolicyDoc, 'find', () => ({
+    select() { return this; },
+    lean: async () => [],
+  }));
   t.mock.method(AuditLog, 'create', async () => ({}));
 
   const result = await answerPolicyQuestion({
@@ -87,13 +103,18 @@ test('Policy Assistant Zod rejection does not trigger provider fallback', async 
   });
 
   assert.equal(result.found, false);
-  assert.equal(hosts.filter((host) => host === 'generativelanguage.googleapis.com').length, 2);
+  assert.equal(hosts.filter((host) => host === 'generativelanguage.googleapis.com').length, 3);
+  assert.deepEqual(requests.map(({ pathname }) => pathname), [
+    '/v1beta/models/synthetic-text-model:generateContent',
+    '/v1beta/models/synthetic-embedding-model:batchEmbedContents',
+    '/v1beta/models/synthetic-text-model:generateContent',
+  ]);
   assert.equal(hosts.filter((host) => host === 'api.cloudflare.com').length, 0);
 });
 
 test('Leave Review Zod rejection does not trigger provider fallback', async (t) => {
   enableMockedProviders(t);
-  const hosts = mockFetch(t, '{"unexpected":"invalid leave review response"}');
+  const { hosts } = mockFetch(t, '{"unexpected":"invalid leave review response"}');
   const employeeId = new mongoose.Types.ObjectId();
   const leaveId = new mongoose.Types.ObjectId();
   const leave = {

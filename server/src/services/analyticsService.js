@@ -9,7 +9,7 @@ import {
 } from './analyticsQueryService.js';
 import {
   buildAnalyticsPlanPrompt,
-  validateAnalyticsPlan,
+  validateAnalyticsPlanOrRecover,
 } from './analyticsPlanService.js';
 import { anonymizeAnalyticsInputs, restoreAnalyticsEmployeeReferences } from './analyticsPrivacyService.js';
 
@@ -50,7 +50,7 @@ const recordAnalyticsAudit = async ({ userId, intent, status, startedAt }) => {
   }
 };
 
-const publicResult = ({ groups: _groups, ...result }) => result;
+const publicResult = ({ groups: _groups, _activityMetadata: _metadata, ...result }) => result;
 
 export const deterministicAnalyticsAnswer = (results) =>
   results.map(({ title, summary }) => `${title}: ${summary}`).join(' ');
@@ -87,7 +87,7 @@ const answerAnalyticsQuestionCore = async ({ userId, question, now = new Date(),
     const priorUserQuestions = conversationHistory.filter(({ role }) => role === 'user');
     const anonymized = anonymizeAnalyticsInputs(question, priorUserQuestions, employeeDirectory);
     const rawPlan = await generateJson(buildAnalyticsPlanPrompt(anonymized.question, now, anonymized.history));
-    const validatedPlan = validateAnalyticsPlan(rawPlan);
+    const validatedPlan = validateAnalyticsPlanOrRecover(rawPlan, question);
     const plan = restoreAnalyticsEmployeeReferences(validatedPlan, anonymized.employeeNames);
     if (!plan) {
       auditStatus = 'unsupported';
